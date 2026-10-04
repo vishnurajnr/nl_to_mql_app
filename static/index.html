@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DA680 — NL to MongoDB Chat</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2029;
+      --panel-2: #232b36;
+      --accent: #10a37f;
+      --user: #2563eb;
+      --text: #e6edf3;
+      --muted: #8b98a5;
+      --border: #2d3542;
+      --code: #0d1117;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column;
+    }
+    header {
+      padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 12px;
+    }
+    header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+    header .tag { font-size: 12px; color: var(--muted); }
+    .model-badge {
+      margin-left: auto; display: inline-flex; align-items: center; gap: 7px;
+      font-size: 12px; color: var(--text); background: var(--panel-2);
+      border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px;
+      white-space: nowrap;
+    }
+    .model-badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 0 rgba(16,163,127,.5); }
+    .model-badge.ok .dot { background: var(--accent); }
+    .model-badge.err .dot { background: #f87171; }
+    .model-badge b { color: var(--accent); font-weight: 600; }
+    #chat { flex: 1; overflow-y: auto; padding: 20px; max-width: 900px; width: 100%; margin: 0 auto; }
+    .msg { margin-bottom: 18px; display: flex; flex-direction: column; }
+    .msg .who { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    .bubble { padding: 12px 14px; border-radius: 10px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+    .user .bubble { background: var(--user); align-self: flex-end; max-width: 75%; }
+    .bot .bubble { background: var(--panel); border: 1px solid var(--border); }
+    .badge {
+      display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+      margin-bottom: 6px; font-weight: 600;
+    }
+    .badge.direct_lookup { background: #1e3a8a; color: #bfdbfe; }
+    .badge.analytical { background: #064e3b; color: #6ee7b7; }
+    .badge.knowledge_base { background: #4a2a6b; color: #e0c6ff; }
+    details { margin-top: 10px; background: var(--panel-2); border-radius: 8px; border: 1px solid var(--border); }
+    summary { cursor: pointer; padding: 8px 12px; font-size: 13px; color: var(--muted); user-select: none; }
+    pre { margin: 0; padding: 12px; background: var(--code); border-radius: 0 0 8px 8px; overflow-x: auto; font-size: 12px; color: #c9d1d9; }
+    .err { color: #f87171; font-size: 13px; margin-top: 6px; }
+    footer { padding: 16px 20px; background: var(--panel); border-top: 1px solid var(--border); }
+    .composer { max-width: 900px; margin: 0 auto; display: flex; gap: 10px; }
+    #input {
+      flex: 1; resize: none; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--panel-2); color: var(--text); font-size: 14px; font-family: inherit; min-height: 46px; max-height: 160px;
+    }
+    #input:focus { outline: none; border-color: var(--accent); }
+    button {
+      background: var(--accent); color: #fff; border: none; border-radius: 10px; padding: 0 20px;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .hint { max-width: 900px; margin: 6px auto 0; font-size: 12px; color: var(--muted); }
+    .hint code { background: var(--panel-2); padding: 1px 6px; border-radius: 4px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>NL → MongoDB Atlas Chat</h1>
+    <span class="tag">DA680 · dual-path routing (direct lookup + analytical)</span>
+    <span id="model-badge" class="model-badge" title="Active language model">
+      <span class="dot"></span><span id="model-text">detecting model…</span>
+    </span>
+  </header>
+
+  <div id="chat">
+    <div class="msg bot">
+      <div class="who">Assistant</div>
+      <div class="bubble">Ask me about your orders, or about MongoDB concepts. I handle three kinds of questions: a <b>direct lookup</b> ("status of order 37126471"), an <b>analytical</b> question ("Why is revenue low today?"), or a <b>knowledge-base</b> question answered from documentation ("What is MongoDB Atlas Vector Search?").</div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="composer">
+      <textarea id="input" placeholder="Ask about orders… (Enter to send, Shift+Enter for newline)"></textarea>
+      <button id="send">Send</button>
+    </div>
+    <div class="hint">
+      Examples:
+      <code class="ex">status of order 37126471</code>
+      <code class="ex">top payment method for cancelled orders</code>
+      <code class="ex">Why are returns high today?</code>
+      <code class="ex">What is MongoDB Atlas Vector Search?</code>
+    </div>
+  </footer>
+
+  <script>
+    const chat = document.getElementById("chat");
+    const input = document.getElementById("input");
+    const send = document.getElementById("send");
+
+    function esc(s) {
+      return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    }
+
+    function addUser(text) {
+      const el = document.createElement("div");
+      el.className = "msg user";
+      el.innerHTML = `<div class="who">You</div><div class="bubble">${esc(text)}</div>`;
+      chat.appendChild(el);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function addBot(data) {
+      const el = document.createElement("div");
+      el.className = "msg bot";
+      let html = `<div class="who">Assistant</div><div class="bubble">`;
+      if (data.path) html += `<span class="badge ${data.path}">${data.path}</span><br/>`;
+      html += esc(data.response || "");
+      if (data.error) html += `<div class="err">error: ${esc(data.error)}</div>`;
+      html += `</div>`;
+      if (data.generated_mql != null) {
+        html += `<details><summary>Generated MQL (audit)</summary><pre>${esc(JSON.stringify(data.generated_mql, null, 2))}</pre></details>`;
+      }
+      if (data.raw_results != null) {
+        html += `<details><summary>Raw results</summary><pre>${esc(JSON.stringify(data.raw_results, null, 2))}</pre></details>`;
+      }
+      el.innerHTML = html;
+      chat.appendChild(el);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function addPending() {
+      const el = document.createElement("div");
+      el.className = "msg bot";
+      el.innerHTML = `<div class="who">Assistant</div><div class="bubble">…thinking</div>`;
+      chat.appendChild(el);
+      chat.scrollTop = chat.scrollHeight;
+      return el;
+    }
+
+    async function submit() {
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+      addUser(text);
+      send.disabled = true;
+      const pending = addPending();
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text, history: [] }),
+        });
+        const data = await res.json();
+        pending.remove();
+        addBot(data);
+      } catch (e) {
+        pending.remove();
+        addBot({ response: "Request failed.", error: String(e) });
+      } finally {
+        send.disabled = false;
+        input.focus();
+      }
+    }
+
+    send.addEventListener("click", submit);
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+    });
+    document.querySelectorAll(".ex").forEach(c =>
+      c.addEventListener("click", () => { input.value = c.textContent; input.focus(); })
+    );
+
+    // Show which LLM provider/model is currently answering.
+    async function loadModel() {
+      const badge = document.getElementById("model-badge");
+      const text = document.getElementById("model-text");
+      try {
+        const res = await fetch("/api/model");
+        const m = await res.json();
+        text.innerHTML = `${esc(m.provider_label || m.provider || "LLM")} · <b>${esc(m.model || "unknown")}</b>`;
+        badge.classList.add("ok");
+        let tip = `Active model: ${m.provider_label || m.provider} / ${m.model}`;
+        if (m.knowledge_base) {
+          const kb = m.knowledge_base;
+          tip += `\nKnowledge base: ${kb.db}.${kb.collection} (${kb.embedding})`;
+        }
+        badge.title = tip;
+      } catch (e) {
+        text.textContent = "model unavailable";
+        badge.classList.add("err");
+      }
+    }
+    loadModel();
+  </script>
+</body>
+</html>
